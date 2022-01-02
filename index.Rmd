@@ -2,29 +2,143 @@
 title: "Practical Machine Learning Course Project"
 author: "Jim Rhudy"
 date: "12/21/2021"
-output: html_document
+output:
+  html_document:
+    keep_md: yes
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Question
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+This project is concerned with prediction of correct versus incorrect performance of barbell lifts (total of five classes) by four individuals contributing a variety of accelerometric features in three axes from body-worn sensors to a dataset described here (source:http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har).
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+## Data
 
-```{r cars}
-summary(cars)
+```{r data packages, message=FALSE}
+
+#Preparation of data and required packages
+trainDat <- read.csv("C:/Users/Jim/Desktop/Rwork/jhuDataScienceFund/machine/project/pml-training.csv", header=TRUE, sep=",")
+dim(trainDat) #[1] 19622   160
+
+testDat <- read.csv("C:/Users/Jim/Desktop/Rwork/jhuDataScienceFund/machine/project/pml-testing.csv", header=TRUE, sep=",")
+
+library(tidyverse); library(caret)
+
 ```
 
-## Including Plots
+## Feature selection from from training set
 
-You can also embed plots, for example:
+```{r features, echo=TRUE}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+############### remove all non-accelerometric features
+accel <- trainDat[ , -c(1:7)]
+dim(accel) 
+
+################### remove features with >90% missing
+accel <- accel[, which(colMeans(!is.na(accel)) > 0.9)] #%>% glimpse
+dim(accel) 
+
+################### remove near zero variance features
+nsv <- nearZeroVar(accel)
+accel <- accel[, -nsv]
+dim(accel) 
+
+################ split into training and validation
+set.seed(2021)
+inTrain <- createDataPartition(y=accel$classe, p=0.75, list=FALSE)
+training <- accel[inTrain,]
+dim(training) #[1] 14718    53
+validation <- accel[-inTrain,]
+dim(validation) #[1] 4904   53
+
+###################### inspect distribution of classe in training set
+dat <- training %>%
+     group_by(classe) %>%
+     summarise(count=n()) %>% glimpse
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Algorithms
+
+```{r model, echo=TRUE, message=FALSE}
+set.seed(2021)
+
+############################### source for implementation of parallel processing:
+#https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md
+
+# The Process: A Parallel Implementation of Random Forest
+
+#Step 1: Configure parallel processing
+library(parallel); library(doParallel)
+cluster <- makeCluster(detectCores() - 1) 
+registerDoParallel(cluster)
+
+#Step 2: Configure trainControl object
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+
+#Step 3: Develop training model
+y <- training[,53]
+length(y) #14718
+x <- training[,-53]
+dim(x) #14718    52
+system.time(fit <- train(x,y, method="rf",data=training,trControl = fitControl))
+
+#Step 4: De-register parallel processing cluster
+stopCluster(cluster)
+registerDoSEQ()
+
+########################## parallel processing guidance ends
+
+#assess properties of the model
+fit
+fit$resample
+confusionMatrix.train(fit)
+#the training model now has an accuracy of 0.9919
+
+
+# plot of classification accuracy by number of tuning factors
+#plot(fit)
+# plot of classification concordance by number of tuning factors
+#plot(fit, metric="Kappa")
+# density plot of accuracy and concordance
+resampleHist(fit)
+# accuracy of the model peaks at 0.992. concordance of the model peaks at 99.0%
+
+# interpret variable importance
+rfImp <-varImp(fit, scale=FALSE) 
+plot(rfImp) # shows features in descending order of importance
+
+
+# predictions on validation data
+predictions <- predict(fit,newdata=validation)
+
+#confusion matrix
+confusionMatrix(factor(predictions), factor(validation$classe))
+#the  model fit on the validation data now has an accuracy of 0.9939
+
+```
+
+The trainControl() step prepares for cross validation with 5-fold resampling rather than the default bootstrap. This choice may have resulted in reduced model accuracy as a tradeoff for increased processing performance.
+
+The model fit on the training data has accuracy of 0.9919; the same model fit on the validation data has accuracy of 0.9939.
+
+## In and Out of Sample Error
+
+The off-diagonal elements of the validation confusion matrix sum to 30; this represents an out-of-sample error rate of 0.6% of the total 4904. 
+
+## Prediction of Test Cases 
+
+Once accuracy greater than 99% was achieved, prediction of test cases was undertaken and the final project quiz was completed.
+
+## Explanation of choices and accuracy tradeoffs
+The random forest method versus other methods has the advantage of accuracy along with the disadvantages of relatively slow computation, difficult interpretability, and tendency to overfit. The choice of cross validation with 5-fold resampling rather than the default bootstrap may have resulted in reduced model accuracy as a tradeoff for increased processing performance.
+
+
+
